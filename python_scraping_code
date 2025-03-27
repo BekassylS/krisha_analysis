@@ -1,0 +1,117 @@
+# Base URL
+base_url = "https://krisha.kz"
+
+# Search URL for listings (modify city if needed)
+search_url_template = "https://krisha.kz/prodazha/kvartiry/astana/?page={}"
+
+# Number of pages to scrape (adjust as needed)
+max_pages = 1 
+
+# Parameters we want to scrape
+required_parameters = [
+    "Город", "Этаж", "Тип дома", "Жилой комплекс", "Площадь", 
+    "Санузел", "Высота потолков", "Год постройки", "Парковка"
+]
+
+# Function to extract price
+def extract_price(soup):
+    price_element = soup.find(['p', 'div'], class_=lambda x: x and "offer__price" in x)
+    if price_element:
+        raw_price = price_element.get_text(" ", strip=True)
+        match = re.search(r'([\d\s\xa0]+)', raw_price)
+        return re.sub(r'\D', '', match.group(1)) if match else None
+    return None
+
+# Function to extract numeric values
+def extract_numeric(text):
+    match = re.search(r'(\d+[\.,]?\d*)', text)
+    return float(match.group(1).replace(',', '.')) if match else None
+
+# Function to extract number of rooms from <h1>
+def extract_rooms(soup):
+    h1_text = soup.find('h1')
+    if h1_text:
+        match = re.search(r'(\d+)-комнатная', h1_text.get_text(strip=True))
+        return int(match.group(1)) if match else None
+    return None
+
+# Function to extract property details
+def extract_listing_data(listing_id):
+    listing_url = f"{base_url}/a/show/{listing_id}"
+    response = requests.get(listing_url)
+    soup = BeautifulSoup(response.text, 'html.parser')
+
+    price = extract_price(soup)
+    rooms = extract_rooms(soup)  # Extract number of rooms from <h1>
+
+    details = {
+        "Listing ID": listing_id,
+        "URL": listing_url,
+        "Price": price,
+        "Количество комнат": rooms,  # Added rooms here
+        "Город": "",
+        "Этаж": "",  # Added "Этаж" here
+        "Тип дома": "",
+        "Жилой комплекс": "",
+        "Площадь": None,
+        "Санузел": "",
+        "Высота потолков": None,
+        "Год постройки": None,
+        "Парковка": ""
+    }
+
+    info_items = soup.find_all('div', class_='offer__info-item')
+
+    for item in info_items:
+        title_element = item.find('div', class_='offer__info-title')
+        value_element = item.find('div', class_='offer__advert-short-info')
+
+        if title_element and value_element:
+            title = title_element.get_text(strip=True)
+            value = value_element.get_text(strip=True).replace('\xa0', ' ')
+
+            if title in required_parameters:
+                if title == "Город":
+                    parts = value.split(',', 1)
+                    district = parts[1].strip() if len(parts) > 1 else value
+                    details[title] = district.replace("показать на карте", "").strip()
+                elif title == "Этаж":
+                    details[title] = value  # Keep full "7 из 16" format
+                elif title in ["Санузел", "Тип дома", "Жилой комплекс", "Парковка"]:
+                    details[title] = value
+                else:
+                    details[title] = extract_numeric(value)
+
+    return details
+
+# Function to get all listing IDs, adjust the range as needed
+def get_all_listing_ids(max_pages):
+    all_ids = []
+    for page in range(1, max_pages + 1):
+        search_url = search_url_template.format(page)
+        print(f"Fetching page {page}...")
+        response = requests.get(search_url)
+        soup = BeautifulSoup(response.text, 'html.parser')
+        listings = soup.find_all('a', class_='a-card__title')
+
+        for listing in listings:
+            if listing.has_attr('href'):
+                match = re.search(r'/a/show/(\d+)', listing['href'])
+                if match:
+                    all_ids.append(match.group(1))
+        time.sleep(2)
+    return all_ids
+
+# Get all listing IDs
+listing_ids = get_all_listing_ids(max_pages)
+
+# Extract data
+all_data = []
+for listing_id in listing_ids:
+    print(f"Scraping: {base_url}/a/show/{listing_id}")
+    data = extract_listing_data(listing_id)
+    all_data.append(data)
+    time.sleep(2)
+
+# Save to CSV
+df = pd.DataFrame(all_data)
